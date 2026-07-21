@@ -155,6 +155,54 @@ fn parse_layout(bytes: &[u8]) -> Result<ZipLayout, Error> {
     })
 }
 
+/// Append a stored (uncompressed) local file header for `name` to `out`.
+/// Writes the fixed header and the filename; the caller appends the file data.
+/// General purpose flag 0, method 0 (stored), zeroed mod time/date.
+fn write_local_header(out: &mut Vec<u8>, name: &[u8], crc: u32, size: u32, name_len: u16) {
+    out.extend_from_slice(&LOCAL_HEADER_SIG.to_le_bytes());
+    out.extend_from_slice(&20u16.to_le_bytes()); // version needed
+    out.extend_from_slice(&0u16.to_le_bytes()); // flags
+    out.extend_from_slice(&0u16.to_le_bytes()); // method = stored
+    out.extend_from_slice(&0u16.to_le_bytes()); // mod time
+    out.extend_from_slice(&0u16.to_le_bytes()); // mod date
+    out.extend_from_slice(&crc.to_le_bytes());
+    out.extend_from_slice(&size.to_le_bytes()); // compressed
+    out.extend_from_slice(&size.to_le_bytes()); // uncompressed
+    out.extend_from_slice(&name_len.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes()); // extra len
+    out.extend_from_slice(name);
+}
+
+/// Append a central-directory header for `name` (a stored entry at
+/// `local_off`) to `out`. Field order/magic mirror [`write_local_header`].
+fn write_cd_header(
+    out: &mut Vec<u8>,
+    name: &[u8],
+    crc: u32,
+    size: u32,
+    name_len: u16,
+    local_off: u32,
+) {
+    out.extend_from_slice(&CD_HEADER_SIG.to_le_bytes());
+    out.extend_from_slice(&20u16.to_le_bytes()); // version made by
+    out.extend_from_slice(&20u16.to_le_bytes()); // version needed
+    out.extend_from_slice(&0u16.to_le_bytes()); // flags
+    out.extend_from_slice(&0u16.to_le_bytes()); // method
+    out.extend_from_slice(&0u16.to_le_bytes()); // time
+    out.extend_from_slice(&0u16.to_le_bytes()); // date
+    out.extend_from_slice(&crc.to_le_bytes());
+    out.extend_from_slice(&size.to_le_bytes()); // compressed
+    out.extend_from_slice(&size.to_le_bytes()); // uncompressed
+    out.extend_from_slice(&name_len.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes()); // extra len
+    out.extend_from_slice(&0u16.to_le_bytes()); // comment len
+    out.extend_from_slice(&0u16.to_le_bytes()); // disk number start
+    out.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
+    out.extend_from_slice(&0u32.to_le_bytes()); // external attrs
+    out.extend_from_slice(&local_off.to_le_bytes());
+    out.extend_from_slice(name);
+}
+
 /// CRC-32 (IEEE, as used by ZIP) of a byte slice.
 fn crc32(data: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
@@ -188,19 +236,8 @@ pub(crate) fn insert_zip_entry(bytes: &[u8], name: &str, content: &[u8]) -> Resu
     let mut out = Vec::with_capacity(bytes.len() + content.len() + 128);
     out.extend_from_slice(&bytes[..layout.cd_start]);
 
-    // Local file header for the stored entry (general purpose flag 0, method 0).
-    out.extend_from_slice(&LOCAL_HEADER_SIG.to_le_bytes());
-    out.extend_from_slice(&20u16.to_le_bytes()); // version needed
-    out.extend_from_slice(&0u16.to_le_bytes()); // flags
-    out.extend_from_slice(&0u16.to_le_bytes()); // method = stored
-    out.extend_from_slice(&0u16.to_le_bytes()); // mod time
-    out.extend_from_slice(&0u16.to_le_bytes()); // mod date
-    out.extend_from_slice(&crc.to_le_bytes());
-    out.extend_from_slice(&size.to_le_bytes()); // compressed
-    out.extend_from_slice(&size.to_le_bytes()); // uncompressed
-    out.extend_from_slice(&name_len.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes()); // extra len
-    out.extend_from_slice(name_b);
+    // Local file header for the stored entry, then its data.
+    write_local_header(&mut out, name_b, crc, size, name_len);
     out.extend_from_slice(content);
 
     let new_cd_start = u32::try_from(out.len()).map_err(|_| Error::Zip64Unsupported)?;
@@ -208,24 +245,7 @@ pub(crate) fn insert_zip_entry(bytes: &[u8], name: &str, content: &[u8]) -> Resu
     out.extend_from_slice(&bytes[layout.cd_start..layout.eocd_offset]);
 
     // New central directory header for the inserted entry.
-    out.extend_from_slice(&CD_HEADER_SIG.to_le_bytes());
-    out.extend_from_slice(&20u16.to_le_bytes()); // version made by
-    out.extend_from_slice(&20u16.to_le_bytes()); // version needed
-    out.extend_from_slice(&0u16.to_le_bytes()); // flags
-    out.extend_from_slice(&0u16.to_le_bytes()); // method
-    out.extend_from_slice(&0u16.to_le_bytes()); // time
-    out.extend_from_slice(&0u16.to_le_bytes()); // date
-    out.extend_from_slice(&crc.to_le_bytes());
-    out.extend_from_slice(&size.to_le_bytes()); // compressed
-    out.extend_from_slice(&size.to_le_bytes()); // uncompressed
-    out.extend_from_slice(&name_len.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes()); // extra len
-    out.extend_from_slice(&0u16.to_le_bytes()); // comment len
-    out.extend_from_slice(&0u16.to_le_bytes()); // disk number start
-    out.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
-    out.extend_from_slice(&0u32.to_le_bytes()); // external attrs
-    out.extend_from_slice(&manifest_local_offset.to_le_bytes());
-    out.extend_from_slice(name_b);
+    write_cd_header(&mut out, name_b, crc, size, name_len, manifest_local_offset);
 
     let new_cd_size =
         u32::try_from(out.len() - new_cd_start as usize).map_err(|_| Error::Truncated)?;
@@ -360,42 +380,27 @@ pub(crate) mod tests {
             let local_off = out.len() as u32;
             offsets.push(local_off);
             let name_b = name.as_bytes();
-            out.extend_from_slice(&LOCAL_HEADER_SIG.to_le_bytes());
-            out.extend_from_slice(&20u16.to_le_bytes()); // version
-            out.extend_from_slice(&0u16.to_le_bytes()); // flags
-            out.extend_from_slice(&0u16.to_le_bytes()); // method = stored
-            out.extend_from_slice(&0u16.to_le_bytes()); // mod time
-            out.extend_from_slice(&0u16.to_le_bytes()); // mod date
-            out.extend_from_slice(&crc32(data).to_le_bytes());
-            out.extend_from_slice(&(data.len() as u32).to_le_bytes()); // comp size
-            out.extend_from_slice(&(data.len() as u32).to_le_bytes()); // uncomp size
-            out.extend_from_slice(&(name_b.len() as u16).to_le_bytes()); // name len
-            out.extend_from_slice(&0u16.to_le_bytes()); // extra len
-            out.extend_from_slice(name_b);
+            write_local_header(
+                &mut out,
+                name_b,
+                crc32(data),
+                data.len() as u32,
+                name_b.len() as u16,
+            );
             out.extend_from_slice(data);
         }
 
         let cd_start = out.len() as u32;
         for (i, (name, data)) in files.iter().enumerate() {
             let name_b = name.as_bytes();
-            cd.extend_from_slice(&CD_HEADER_SIG.to_le_bytes());
-            cd.extend_from_slice(&20u16.to_le_bytes()); // version made by
-            cd.extend_from_slice(&20u16.to_le_bytes()); // version needed
-            cd.extend_from_slice(&0u16.to_le_bytes()); // flags
-            cd.extend_from_slice(&0u16.to_le_bytes()); // method
-            cd.extend_from_slice(&0u16.to_le_bytes()); // time
-            cd.extend_from_slice(&0u16.to_le_bytes()); // date
-            cd.extend_from_slice(&crc32(data).to_le_bytes());
-            cd.extend_from_slice(&(data.len() as u32).to_le_bytes()); // comp
-            cd.extend_from_slice(&(data.len() as u32).to_le_bytes()); // uncomp
-            cd.extend_from_slice(&(name_b.len() as u16).to_le_bytes()); // name len
-            cd.extend_from_slice(&0u16.to_le_bytes()); // extra len
-            cd.extend_from_slice(&0u16.to_le_bytes()); // comment len
-            cd.extend_from_slice(&0u16.to_le_bytes()); // disk start
-            cd.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
-            cd.extend_from_slice(&0u32.to_le_bytes()); // external attrs
-            cd.extend_from_slice(&offsets[i].to_le_bytes()); // local header offset
-            cd.extend_from_slice(name_b);
+            write_cd_header(
+                &mut cd,
+                name_b,
+                crc32(data),
+                data.len() as u32,
+                name_b.len() as u16,
+                offsets[i],
+            );
         }
         let cd_size = cd.len() as u32;
         out.extend_from_slice(&cd);
