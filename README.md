@@ -1,11 +1,8 @@
 <p align="center">
-  <h1 align="center">c2pa-zip</h1>
-  <p align="center">C2PA Manifest Store embedding and reading for ZIP-based (OCF-style) documents: EPUB, DOCX, ODT, OXPS</p>
-</p>
-
-<p align="center">
   <a href="https://crates.io/crates/c2pa-zip"><img src="https://img.shields.io/crates/v/c2pa-zip.svg" alt="crates.io"></a>
   <a href="https://docs.rs/c2pa-zip"><img src="https://docs.rs/c2pa-zip/badge.svg" alt="docs.rs"></a>
+  <a href="https://github.com/writerslogic/c2pa-zip/actions/workflows/ci.yml"><img src="https://github.com/writerslogic/c2pa-zip/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/writerslogic/c2pa-zip"><img src="https://api.securityscorecards.dev/projects/github.com/writerslogic/c2pa-zip/badge" alt="OpenSSF Scorecard"></a>
   <a href="#license"><img src="https://img.shields.io/crates/l/c2pa-zip.svg" alt="License"></a>
 </p>
 
