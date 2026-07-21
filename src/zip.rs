@@ -54,6 +54,22 @@ struct ZipLayout {
     eocd_offset: usize,
 }
 
+/// Byte range spanned by entry `i` (local header through file data), ending at
+/// the next entry's local header or, for the last entry, at the central
+/// directory. Bounds-checked against the layout (`BadOffset` if inconsistent).
+fn entry_data_range(layout: &ZipLayout, i: usize) -> Result<std::ops::Range<usize>, Error> {
+    let start = layout.entries[i].local_header_offset;
+    let end = layout
+        .entries
+        .get(i + 1)
+        .map(|n| n.local_header_offset)
+        .unwrap_or(layout.cd_start);
+    if start > end || end > layout.cd_start {
+        return Err(Error::BadOffset);
+    }
+    Ok(start..end)
+}
+
 /// Locate the EOCD by scanning backwards for its signature, tolerating a trailing
 /// ZIP comment of up to 65535 bytes.
 fn find_eocd(bytes: &[u8]) -> Result<usize, Error> {
@@ -291,11 +307,7 @@ pub(crate) fn read_zip_entry_content<'a>(
         let content_end = content_start
             .checked_add(comp_size)
             .ok_or(Error::Truncated)?;
-        let entry_end = layout
-            .entries
-            .get(i + 1)
-            .map(|n| n.local_header_offset)
-            .unwrap_or(layout.cd_start);
+        let entry_end = entry_data_range(&layout, i)?.end;
         if content_end > entry_end {
             return Err(Error::BadOffset);
         }
@@ -320,20 +332,11 @@ pub(crate) fn remove_zip_entry(bytes: &[u8], name: &str) -> Result<Vec<u8>, Erro
     // Retained entries paired with their new local-header offsets, in offset order.
     let mut retained: Vec<(&CdEntry, u32)> = Vec::with_capacity(layout.entries.len());
     for (i, entry) in layout.entries.iter().enumerate() {
-        let end = layout
-            .entries
-            .get(i + 1)
-            .map(|n| n.local_header_offset)
-            .unwrap_or(layout.cd_start);
-        if entry.local_header_offset > end || end > layout.cd_start {
-            return Err(Error::BadOffset);
-        }
+        let range = entry_data_range(&layout, i)?;
         if entry.name == name {
             continue;
         }
-        let data = bytes
-            .get(entry.local_header_offset..end)
-            .ok_or(Error::Truncated)?;
+        let data = bytes.get(range).ok_or(Error::Truncated)?;
         let new_off = u32::try_from(out.len()).map_err(|_| Error::Zip64Unsupported)?;
         out.extend_from_slice(data);
         retained.push((entry, new_off));
