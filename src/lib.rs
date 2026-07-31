@@ -17,16 +17,33 @@
 //! their byte offsets, then rebuilds the central directory and end-of-central-
 //! directory record.
 //!
-//! Manifest construction, signing, and hard/soft binding (the collection-data-
-//! hash) are out of scope; use the official [`c2pa`](https://crates.io/crates/c2pa)
-//! SDK for those.
+//! # Binding inputs
+//!
+//! A ZIP asset is bound with a `c2pa.hash.collection.data` assertion carrying
+//! one entry per member plus the additional `zip_central_directory_hash` field,
+//! which covers the archive's own directory so that an entry added after
+//! signing cannot leave the manifest valid.
+//!
+//! [`collection_members`] and [`central_directory_range`] supply the byte ranges
+//! the specification says to hash. They deliberately do not hash them: locating
+//! those ranges is ZIP parsing, which is this crate's job, while choosing and
+//! running a digest is the caller's, and keeping that split is what lets this
+//! crate stay dependency-free.
+//!
+//! Manifest construction and signing remain out of scope; use the official
+//! [`c2pa`](https://crates.io/crates/c2pa) SDK for those.
 
+mod binding;
 mod error;
 mod reader;
 mod verify;
 mod writer;
 mod zip;
 
+#[cfg(feature = "python")]
+mod python;
+
+pub use binding::{central_directory_range, collection_members, Member};
 pub use error::Error;
 pub use reader::read_manifest;
 pub use verify::{verify, Compliance};

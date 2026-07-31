@@ -283,6 +283,34 @@ pub(crate) fn insert_zip_entry(bytes: &[u8], name: &str, content: &[u8]) -> Resu
 
 /// Read the stored content of a named entry (e.g. the manifest) from a ZIP.
 /// Returns `Ok(None)` if the entry is absent.
+/// Byte range of entry `i`'s stored content, after its local header.
+fn entry_content_range(
+    bytes: &[u8],
+    layout: &ZipLayout,
+    i: usize,
+) -> Result<std::ops::Range<usize>, Error> {
+    let lh = layout.entries[i].local_header_offset;
+    if read_u32(bytes, lh)? != LOCAL_HEADER_SIG {
+        return Err(Error::Truncated);
+    }
+    let comp_size = read_u32(bytes, lh + 18)? as usize;
+    let name_len = read_u16(bytes, lh + 26)? as usize;
+    let extra_len = read_u16(bytes, lh + 28)? as usize;
+    let start = lh
+        .checked_add(LOCAL_HEADER_FIXED_LEN)
+        .and_then(|c| c.checked_add(name_len))
+        .and_then(|c| c.checked_add(extra_len))
+        .ok_or(Error::Truncated)?;
+    let end = start.checked_add(comp_size).ok_or(Error::Truncated)?;
+    if end > entry_data_range(layout, i)?.end {
+        return Err(Error::BadOffset);
+    }
+    if end > bytes.len() {
+        return Err(Error::Truncated);
+    }
+    Ok(start..end)
+}
+
 pub(crate) fn read_zip_entry_content<'a>(
     bytes: &'a [u8],
     name: &str,
@@ -292,31 +320,34 @@ pub(crate) fn read_zip_entry_content<'a>(
         if entry.name != name {
             continue;
         }
-        let lh = entry.local_header_offset;
-        if read_u32(bytes, lh)? != LOCAL_HEADER_SIG {
-            return Err(Error::Truncated);
-        }
-        let comp_size = read_u32(bytes, lh + 18)? as usize;
-        let name_len = read_u16(bytes, lh + 26)? as usize;
-        let extra_len = read_u16(bytes, lh + 28)? as usize;
-        let content_start = lh
-            .checked_add(LOCAL_HEADER_FIXED_LEN)
-            .and_then(|c| c.checked_add(name_len))
-            .and_then(|c| c.checked_add(extra_len))
-            .ok_or(Error::Truncated)?;
-        let content_end = content_start
-            .checked_add(comp_size)
-            .ok_or(Error::Truncated)?;
-        let entry_end = entry_data_range(&layout, i)?.end;
-        if content_end > entry_end {
-            return Err(Error::BadOffset);
-        }
-        return bytes
-            .get(content_start..content_end)
-            .map(Some)
-            .ok_or(Error::Truncated);
+        let range = entry_content_range(bytes, &layout, i)?;
+        return bytes.get(range).map(Some).ok_or(Error::Truncated);
     }
     Ok(None)
+}
+
+/// Every entry's name and stored-content range, in archive order.
+pub(crate) fn member_ranges(bytes: &[u8]) -> Result<Vec<(String, std::ops::Range<usize>)>, Error> {
+    let layout = parse_layout(bytes)?;
+    (0..layout.entries.len())
+        .map(|i| {
+            Ok((
+                layout.entries[i].name.clone(),
+                entry_content_range(bytes, &layout, i)?,
+            ))
+        })
+        .collect()
+}
+
+/// From the first central directory header to the end of the archive, which
+/// covers every central directory header and the end-of-central-directory
+/// record (including any trailing comment, which is part of that record).
+pub(crate) fn central_directory_range(bytes: &[u8]) -> Result<std::ops::Range<usize>, Error> {
+    let layout = parse_layout(bytes)?;
+    if layout.cd_start > bytes.len() || layout.cd_start > layout.eocd_offset {
+        return Err(Error::BadOffset);
+    }
+    Ok(layout.cd_start..bytes.len())
 }
 
 /// Remove the entry named `name`, rebuilding the archive (file data + central
