@@ -2,6 +2,8 @@
 name = "c2pa-zip"
 version = "0.1.0"
 edition = "2021"
+# One MSRV across the crate family; verified with `cargo +1.87 check`.
+rust-version = "1.87"
 description = "C2PA Manifest Store embedding and reading for ZIP-based (OCF-style) documents: EPUB, DOCX, ODT, OXPS"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/writerslogic/c2pa-zip"
