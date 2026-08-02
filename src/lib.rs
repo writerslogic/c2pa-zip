@@ -40,7 +40,10 @@ mod verify;
 mod writer;
 mod zip;
 
-#[cfg(feature = "python")]
+#[cfg(target_arch = "wasm32")]
+mod wasm;
+
+#[cfg(all(feature = "python", not(target_arch = "wasm32")))]
 mod python;
 
 pub use binding::{central_directory_range, collection_members, Member};
