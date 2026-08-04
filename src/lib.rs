@@ -33,6 +33,8 @@
 //! Manifest construction and signing remain out of scope; use the official
 //! [`c2pa`](https://crates.io/crates/c2pa) SDK for those.
 
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 mod binding;
 mod error;
 mod reader;

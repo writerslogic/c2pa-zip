@@ -1,5 +1,9 @@
 use std::fmt;
 
+/// Errors from reading or writing a ZIP-based document.
+///
+/// Every variant is an archive-parsing failure, so none carries a C2PA
+/// validation status code — see [`Error::code`].
 #[derive(Debug)]
 pub enum Error {
     /// The end-of-central-directory record was not found.

@@ -24,7 +24,10 @@ use crate::zip::{self, ZIP_MANIFEST_PATH};
 /// `uri` field of the corresponding collection entry takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Member {
+    /// The entry's path within the archive.
     pub name: String,
+    /// Byte range of the bytes the collection hash covers for this member: the
+    /// local file header followed by the stored (still compressed) content.
     pub content: std::ops::Range<usize>,
 }
 
