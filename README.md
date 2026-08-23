@@ -1,3 +1,7 @@
+# c2pa-zip
+
+_C2PA Manifest Store embedding and reading for ZIP-based (OCF-style) documents: EPUB, DOCX, ODT, OXPS._
+
 <p align="center">
   <a href="https://crates.io/crates/c2pa-zip"><img src="https://img.shields.io/crates/v/c2pa-zip.svg" alt="crates.io"></a>
   <a href="https://docs.rs/c2pa-zip"><img src="https://docs.rs/c2pa-zip/badge.svg" alt="docs.rs"></a>
@@ -28,7 +32,14 @@ Zero dependencies.
 
 ```toml
 [dependencies]
-c2pa-zip = "0.1"
+c2pa-zip = "0.2"
+```
+
+The same crate is published for JavaScript/WebAssembly and Python, built from this source:
+
+```bash
+npm install c2pa-zip   # wasm-bindgen build
+pip install c2pa-zip   # PyO3 abi3 wheel, CPython 3.9+
 ```
 
 ### Embed a manifest
