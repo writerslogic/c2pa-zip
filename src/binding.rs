@@ -18,7 +18,7 @@
 use crate::error::Error;
 use crate::zip::{self, ZIP_MANIFEST_PATH};
 
-/// A member of the archive, and the byte range of its stored content.
+/// A member of the archive, and its complete collection-hash byte range.
 ///
 /// The `name` is the entry's path within the archive, which is the value the
 /// `uri` field of the corresponding collection entry takes.
@@ -43,15 +43,25 @@ pub fn collection_members(zip: &[u8]) -> Result<Vec<Member>, Error> {
         .collect())
 }
 
-/// The byte range covered by `zip_central_directory_hash`: every central
-/// directory header together with the end-of-central-directory record.
+/// The contiguous byte range covered by `zip_central_directory_hash` for an
+/// archive without a manifest entry.
 ///
-/// The specification defines this field as a hash "of every central directory
-/// header in the ZIP Central Directory as well as the end of central directory
-/// record". Those are contiguous, so the coverage is a single range running
-/// from the first header to the end of the archive.
+/// Once a manifest is present its central-directory CRC-32 must be skipped, so
+/// the binding is non-contiguous and this function returns
+/// [`Error::NonContiguousCentralDirectoryHash`]. Use
+/// [`central_directory_ranges`] for signing and validation.
 pub fn central_directory_range(zip: &[u8]) -> Result<std::ops::Range<usize>, Error> {
     zip::central_directory_range(zip)
+}
+
+/// Ordered byte ranges to concatenate and hash for
+/// `zip_central_directory_hash`.
+///
+/// They cover all central-directory headers and the EOCD. When the manifest
+/// entry exists, its four-byte CRC-32 field is the only omitted span, as the
+/// C2PA ZIP embedding method requires for reproducible two-pass signing.
+pub fn central_directory_ranges(zip: &[u8]) -> Result<Vec<std::ops::Range<usize>>, Error> {
+    zip::central_directory_ranges(zip)
 }
 
 #[cfg(test)]
@@ -83,11 +93,12 @@ mod tests {
     }
 
     #[test]
-    fn member_ranges_address_the_stored_content() {
+    fn member_ranges_include_the_local_header_and_stored_content() {
         let zip = fixture();
         let members = collection_members(&zip).unwrap();
         let mimetype = members.iter().find(|m| m.name == "mimetype").unwrap();
-        assert_eq!(&zip[mimetype.content.clone()], b"application/epub+zip");
+        assert!(zip[mimetype.content.clone()].starts_with(b"PK\x03\x04"));
+        assert!(zip[mimetype.content.clone()].ends_with(b"application/epub+zip"));
     }
 
     #[test]
@@ -106,24 +117,51 @@ mod tests {
         let zip = fixture();
         let before = &zip[central_directory_range(&zip).unwrap()].to_vec();
         let signed = embed_manifest(&zip, MANIFEST).unwrap();
-        let after = &signed[central_directory_range(&signed).unwrap()].to_vec();
+        let after = central_directory_ranges(&signed)
+            .unwrap()
+            .into_iter()
+            .flat_map(|range| signed[range].to_vec())
+            .collect::<Vec<_>>();
         // This is the property the field exists for: an entry appended after
         // signing cannot leave the directory coverage unchanged.
-        assert_ne!(before, after);
+        assert_ne!(before, &after);
     }
 
     #[test]
     fn every_member_range_is_inside_the_archive_and_before_the_directory() {
         let signed = embed_manifest(&fixture(), MANIFEST).unwrap();
-        let cd = central_directory_range(&signed).unwrap();
+        let cd_start = central_directory_ranges(&signed).unwrap()[0].start;
         for m in collection_members(&signed).unwrap() {
             assert!(m.content.end <= signed.len(), "{} past end", m.name);
             assert!(m.content.start <= m.content.end, "{} inverted", m.name);
             assert!(
-                m.content.end <= cd.start,
+                m.content.end <= cd_start,
                 "{} overlaps the directory",
                 m.name
             );
+        }
+    }
+
+    #[test]
+    fn manifest_crc_is_the_only_directory_bytes_excluded() {
+        let signed = embed_manifest(&fixture(), MANIFEST).unwrap();
+        let ranges = central_directory_ranges(&signed).unwrap();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[1].start - ranges[0].end, 4);
+        assert!(matches!(
+            central_directory_range(&signed),
+            Err(Error::NonContiguousCentralDirectoryHash)
+        ));
+    }
+
+    #[test]
+    fn dot_segments_are_rejected_as_collection_member_uris() {
+        for name in ["../secret", "a/./b", "a/../b"] {
+            let zip = build_zip(&[(name, b"x")]);
+            assert!(matches!(
+                collection_members(&zip),
+                Err(Error::InvalidMemberPath(_))
+            ));
         }
     }
 
@@ -134,6 +172,7 @@ mod tests {
             let truncated = &zip[..cut];
             assert!(collection_members(truncated).is_err() || truncated.is_empty());
             assert!(central_directory_range(truncated).is_err() || truncated.is_empty());
+            assert!(central_directory_ranges(truncated).is_err() || truncated.is_empty());
         }
     }
 }

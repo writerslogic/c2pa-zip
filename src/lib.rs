@@ -24,7 +24,7 @@
 //! which covers the archive's own directory so that an entry added after
 //! signing cannot leave the manifest valid.
 //!
-//! [`collection_members`] and [`central_directory_range`] supply the byte ranges
+//! [`collection_members`] and [`central_directory_ranges`] supply the byte ranges
 //! the specification says to hash. They deliberately do not hash them: locating
 //! those ranges is ZIP parsing, which is this crate's job, while choosing and
 //! running a digest is the caller's, and keeping that split is what lets this
@@ -48,7 +48,7 @@ mod wasm;
 #[cfg(all(feature = "python", not(target_arch = "wasm32")))]
 mod python;
 
-pub use binding::{central_directory_range, collection_members, Member};
+pub use binding::{central_directory_range, central_directory_ranges, collection_members, Member};
 pub use error::Error;
 pub use reader::read_manifest;
 pub use verify::{verify, Compliance};

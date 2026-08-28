@@ -11,6 +11,7 @@ use crate::error::Error;
 const EOCD_SIG: u32 = 0x0605_4b50;
 const CD_HEADER_SIG: u32 = 0x0201_4b50;
 const LOCAL_HEADER_SIG: u32 = 0x0403_4b50;
+const DATA_DESCRIPTOR_SIG: u32 = 0x0807_4b50;
 /// Minimum end-of-central-directory record length (no comment).
 const EOCD_MIN_LEN: usize = 22;
 /// Fixed central-directory-header length (before variable name/extra/comment).
@@ -40,6 +41,10 @@ fn read_u32(buf: &[u8], at: usize) -> Result<u32, Error> {
 /// range of its own central-directory header.
 struct CdEntry {
     name: String,
+    flags: u16,
+    crc32: u32,
+    compressed_size: usize,
+    uncompressed_size: usize,
     local_header_offset: usize,
     cd_header_offset: usize,
     cd_header_len: usize,
@@ -52,22 +57,6 @@ struct ZipLayout {
     cd_start: usize,
     /// Offset of the end-of-central-directory record (end of the CD headers).
     eocd_offset: usize,
-}
-
-/// Byte range spanned by entry `i` (local header through file data), ending at
-/// the next entry's local header or, for the last entry, at the central
-/// directory. Bounds-checked against the layout (`BadOffset` if inconsistent).
-fn entry_data_range(layout: &ZipLayout, i: usize) -> Result<std::ops::Range<usize>, Error> {
-    let start = layout.entries[i].local_header_offset;
-    let end = layout
-        .entries
-        .get(i + 1)
-        .map(|n| n.local_header_offset)
-        .unwrap_or(layout.cd_start);
-    if start > end || end > layout.cd_start {
-        return Err(Error::BadOffset);
-    }
-    Ok(start..end)
 }
 
 /// Locate the EOCD by scanning backwards for its signature, tolerating a trailing
@@ -127,7 +116,14 @@ fn parse_layout(bytes: &[u8]) -> Result<ZipLayout, Error> {
         let extra_len = read_u16(bytes, cursor + 30)? as usize;
         let comment = read_u16(bytes, cursor + 32)? as usize;
         let local_off = read_u32(bytes, cursor + 42)?;
+        let flags = read_u16(bytes, cursor + 8)?;
+        let crc32 = read_u32(bytes, cursor + 16)?;
+        let compressed_size = read_u32(bytes, cursor + 20)?;
+        let uncompressed_size = read_u32(bytes, cursor + 24)?;
         if local_off == ZIP64_SENTINEL_U32 {
+            return Err(Error::Zip64Unsupported);
+        }
+        if compressed_size == ZIP64_SENTINEL_U32 || uncompressed_size == ZIP64_SENTINEL_U32 {
             return Err(Error::Zip64Unsupported);
         }
         let name_start = cursor
@@ -152,6 +148,10 @@ fn parse_layout(bytes: &[u8]) -> Result<ZipLayout, Error> {
         }
         entries.push(CdEntry {
             name,
+            flags,
+            crc32,
+            compressed_size: compressed_size as usize,
+            uncompressed_size: uncompressed_size as usize,
             local_header_offset: local_off,
             cd_header_offset: cursor,
             cd_header_len: next - cursor,
@@ -293,7 +293,11 @@ fn entry_content_range(
     if read_u32(bytes, lh)? != LOCAL_HEADER_SIG {
         return Err(Error::Truncated);
     }
-    let comp_size = read_u32(bytes, lh + 18)? as usize;
+    let entry = &layout.entries[i];
+    let local_flags = read_u16(bytes, lh + 6)?;
+    if local_flags != entry.flags {
+        return Err(Error::BadOffset);
+    }
     let name_len = read_u16(bytes, lh + 26)? as usize;
     let extra_len = read_u16(bytes, lh + 28)? as usize;
     let start = lh
@@ -301,14 +305,58 @@ fn entry_content_range(
         .and_then(|c| c.checked_add(name_len))
         .and_then(|c| c.checked_add(extra_len))
         .ok_or(Error::Truncated)?;
-    let end = start.checked_add(comp_size).ok_or(Error::Truncated)?;
-    if end > entry_data_range(layout, i)?.end {
+    let end = start
+        .checked_add(entry.compressed_size)
+        .ok_or(Error::Truncated)?;
+    if end > entry_boundary(layout, i) {
         return Err(Error::BadOffset);
     }
     if end > bytes.len() {
         return Err(Error::Truncated);
     }
     Ok(start..end)
+}
+
+fn entry_boundary(layout: &ZipLayout, i: usize) -> usize {
+    layout
+        .entries
+        .get(i + 1)
+        .map(|next| next.local_header_offset)
+        .unwrap_or(layout.cd_start)
+}
+
+/// The member binding range: local header, name/extra fields, compressed file
+/// data, and the data descriptor when general-purpose bit 3 is set.
+fn entry_binding_range(
+    bytes: &[u8],
+    layout: &ZipLayout,
+    i: usize,
+) -> Result<std::ops::Range<usize>, Error> {
+    let entry = &layout.entries[i];
+    let content = entry_content_range(bytes, layout, i)?;
+    let mut end = content.end;
+    if entry.flags & 0x0008 != 0 {
+        if read_u32(bytes, end).ok() == Some(DATA_DESCRIPTOR_SIG) {
+            end = end.checked_add(4).ok_or(Error::Truncated)?;
+        }
+        let descriptor_end = end.checked_add(12).ok_or(Error::Truncated)?;
+        if descriptor_end > entry_boundary(layout, i) {
+            return Err(Error::MalformedDataDescriptor);
+        }
+        if read_u32(bytes, end)? != entry.crc32
+            || read_u32(bytes, end + 4)? as usize != entry.compressed_size
+            || read_u32(bytes, end + 8)? as usize != entry.uncompressed_size
+        {
+            return Err(Error::MalformedDataDescriptor);
+        }
+        end = descriptor_end;
+    } else if read_u32(bytes, entry.local_header_offset + 14)? != entry.crc32
+        || read_u32(bytes, entry.local_header_offset + 18)? as usize != entry.compressed_size
+        || read_u32(bytes, entry.local_header_offset + 22)? as usize != entry.uncompressed_size
+    {
+        return Err(Error::BadOffset);
+    }
+    Ok(entry.local_header_offset..end)
 }
 
 pub(crate) fn read_zip_entry_content<'a>(
@@ -326,28 +374,57 @@ pub(crate) fn read_zip_entry_content<'a>(
     Ok(None)
 }
 
-/// Every entry's name and stored-content range, in archive order.
+/// Every entry's name and complete member-binding range, in archive order.
 pub(crate) fn member_ranges(bytes: &[u8]) -> Result<Vec<(String, std::ops::Range<usize>)>, Error> {
     let layout = parse_layout(bytes)?;
     (0..layout.entries.len())
         .map(|i| {
+            validate_member_uri(&layout.entries[i].name)?;
             Ok((
                 layout.entries[i].name.clone(),
-                entry_content_range(bytes, &layout, i)?,
+                entry_binding_range(bytes, &layout, i)?,
             ))
         })
         .collect()
+}
+
+fn validate_member_uri(name: &str) -> Result<(), Error> {
+    if name
+        .split('/')
+        .any(|segment| segment == "." || segment == "..")
+    {
+        return Err(Error::InvalidMemberPath(name.to_string()));
+    }
+    Ok(())
 }
 
 /// From the first central directory header to the end of the archive, which
 /// covers every central directory header and the end-of-central-directory
 /// record (including any trailing comment, which is part of that record).
 pub(crate) fn central_directory_range(bytes: &[u8]) -> Result<std::ops::Range<usize>, Error> {
+    let ranges = central_directory_ranges(bytes)?;
+    if ranges.len() != 1 {
+        return Err(Error::NonContiguousCentralDirectoryHash);
+    }
+    Ok(ranges[0].clone())
+}
+
+pub(crate) fn central_directory_ranges(bytes: &[u8]) -> Result<Vec<std::ops::Range<usize>>, Error> {
     let layout = parse_layout(bytes)?;
     if layout.cd_start > bytes.len() || layout.cd_start > layout.eocd_offset {
         return Err(Error::BadOffset);
     }
-    Ok(layout.cd_start..bytes.len())
+    let manifest = layout
+        .entries
+        .iter()
+        .find(|entry| entry.name == ZIP_MANIFEST_PATH);
+    if let Some(entry) = manifest {
+        let crc_start = entry.cd_header_offset + 16;
+        let crc_end = crc_start + 4;
+        Ok(vec![layout.cd_start..crc_start, crc_end..bytes.len()])
+    } else {
+        Ok(std::iter::once(layout.cd_start..bytes.len()).collect())
+    }
 }
 
 /// Remove the entry named `name`, rebuilding the archive (file data + central
@@ -363,7 +440,7 @@ pub(crate) fn remove_zip_entry(bytes: &[u8], name: &str) -> Result<Vec<u8>, Erro
     // Retained entries paired with their new local-header offsets, in offset order.
     let mut retained: Vec<(&CdEntry, u32)> = Vec::with_capacity(layout.entries.len());
     for (i, entry) in layout.entries.iter().enumerate() {
-        let range = entry_data_range(&layout, i)?;
+        let range = entry_binding_range(bytes, &layout, i)?;
         if entry.name == name {
             continue;
         }
@@ -534,6 +611,38 @@ pub(crate) mod tests {
             b"CCCC"
         );
         assert!(read_zip_entry_content(&out, "b.txt").unwrap().is_none());
+    }
+
+    #[test]
+    fn streamed_entry_uses_central_size_and_includes_data_descriptor() {
+        let name = "stream.txt";
+        let data = b"streamed bytes";
+        let mut zip = build_zip(&[(name, data.as_slice())]);
+        let original = parse_layout(&zip).unwrap();
+        let old_cd = original.cd_start;
+        let crc = crc32(data);
+
+        // Bit 3 means the local CRC and sizes are deferred to a descriptor.
+        zip[6..8].copy_from_slice(&8u16.to_le_bytes());
+        zip[14..26].fill(0);
+        let mut descriptor = Vec::new();
+        descriptor.extend_from_slice(&DATA_DESCRIPTOR_SIG.to_le_bytes());
+        descriptor.extend_from_slice(&crc.to_le_bytes());
+        descriptor.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        descriptor.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        zip.splice(old_cd..old_cd, descriptor);
+
+        let new_cd = old_cd + 16;
+        zip[new_cd + 8..new_cd + 10].copy_from_slice(&8u16.to_le_bytes());
+        let eocd = zip.len() - EOCD_MIN_LEN;
+        zip[eocd + 16..eocd + 20].copy_from_slice(&(new_cd as u32).to_le_bytes());
+
+        let layout = parse_layout(&zip).unwrap();
+        let content = entry_content_range(&zip, &layout, 0).unwrap();
+        assert_eq!(&zip[content], data);
+        let binding = entry_binding_range(&zip, &layout, 0).unwrap();
+        assert!(zip[binding.clone()].starts_with(b"PK\x03\x04"));
+        assert_eq!(binding.end, new_cd);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! the test fail loudly — it cannot silently pass.
 
 use c2pa_zip::{
-    central_directory_range, collection_members, embed_manifest, read_manifest, remove_manifest,
+    central_directory_ranges, collection_members, embed_manifest, read_manifest, remove_manifest,
     verify, Error, ZIP_MANIFEST_PATH,
 };
 
@@ -151,13 +151,15 @@ fn the_collection_covers_every_member_except_the_manifest() {
 #[test]
 fn the_central_directory_range_is_in_bounds_and_starts_at_a_header() {
     let embedded = embed_manifest(&epub(), STORE).unwrap();
-    let range = central_directory_range(&embedded).unwrap();
-    assert!(range.end <= embedded.len());
+    let ranges = central_directory_ranges(&embedded).unwrap();
+    assert_eq!(ranges.len(), 2, "the manifest CRC splits the coverage");
+    assert!(ranges.iter().all(|range| range.end <= embedded.len()));
     assert_eq!(
-        &embedded[range.start..range.start + 4],
+        &embedded[ranges[0].start..ranges[0].start + 4],
         b"PK\x01\x02",
-        "the range should begin at a central directory header"
+        "coverage should begin at a central directory header"
     );
+    assert_eq!(ranges[1].start - ranges[0].end, 4);
 }
 
 #[test]

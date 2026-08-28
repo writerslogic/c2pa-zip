@@ -80,6 +80,14 @@ let report = verify(&signed).unwrap();
 // report.has_manifest, report.manifest_len, report.is_valid_zip
 ```
 
+### Build the collection hash
+
+`collection_members` returns each member's local header, compressed content,
+and data descriptor as one range. For `zip_central_directory_hash`, concatenate
+the ordered slices returned by `central_directory_ranges`; when a manifest is
+present they skip its four-byte central-directory CRC-32 so a two-pass signing
+flow is reproducible.
+
 ## Design
 
 - The Manifest Store is a single stored (uncompressed) ZIP entry at `META-INF/content_credential.c2pa`

@@ -56,6 +56,22 @@ pub fn central_directory_range(zip: &[u8]) -> Result<JsValue, JsError> {
     Ok(out.into())
 }
 
+/// Ordered `{ start, length }` ranges to concatenate for the central-directory
+/// hash, excluding the manifest entry's CRC-32.
+#[wasm_bindgen(js_name = centralDirectoryRanges)]
+pub fn central_directory_ranges(zip: &[u8]) -> Result<Vec<JsValue>, JsError> {
+    Ok(crate::central_directory_ranges(zip)
+        .map_err(js_err)?
+        .into_iter()
+        .map(|range| {
+            let out = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(&out, &"start".into(), &(range.start as u32).into());
+            let _ = js_sys::Reflect::set(&out, &"length".into(), &(range.len() as u32).into());
+            out.into()
+        })
+        .collect())
+}
+
 /// Structurally verify the embedding, as `{ hasManifest, manifestLen,
 /// isValidZip }`. Transport-level only: no signature or collection hash is
 /// checked.
