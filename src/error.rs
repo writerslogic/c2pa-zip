@@ -16,6 +16,15 @@ pub enum Error {
     BadOffset,
     /// A ZIP entry name was not valid UTF-8.
     NonUtf8Name,
+    /// A collection member name contains a forbidden `.` or `..` URI path
+    /// segment.
+    InvalidMemberPath(String),
+    /// A streamed entry's data descriptor is missing or inconsistent with its
+    /// central-directory record.
+    MalformedDataDescriptor,
+    /// The central-directory binding is split around the manifest CRC-32 and
+    /// cannot be represented as one contiguous range.
+    NonContiguousCentralDirectoryHash,
 }
 
 impl Error {
@@ -57,6 +66,11 @@ impl fmt::Display for Error {
             Self::Zip64Unsupported => "ZIP64 archives are not supported",
             Self::BadOffset => "ZIP central directory offset out of range",
             Self::NonUtf8Name => "ZIP entry name is not valid UTF-8",
+            Self::InvalidMemberPath(_) => "ZIP entry name is not a valid collection member URI",
+            Self::MalformedDataDescriptor => "ZIP data descriptor is missing or malformed",
+            Self::NonContiguousCentralDirectoryHash => {
+                "ZIP central-directory hash requires multiple byte ranges"
+            }
         };
         f.write_str(msg)
     }
@@ -78,6 +92,9 @@ mod tests {
             Error::Zip64Unsupported,
             Error::BadOffset,
             Error::NonUtf8Name,
+            Error::InvalidMemberPath("../secret".into()),
+            Error::MalformedDataDescriptor,
+            Error::NonContiguousCentralDirectoryHash,
         ] {
             assert_eq!(e.code(), None, "{e:?} claimed a status code");
             assert!(

@@ -61,6 +61,17 @@ fn central_directory_range(zip: &[u8]) -> PyResult<(usize, usize)> {
     Ok((r.start, r.len()))
 }
 
+/// Ordered `(start, length)` ranges to concatenate for the central-directory
+/// hash, excluding the manifest entry's CRC-32.
+#[pyfunction]
+fn central_directory_ranges(zip: &[u8]) -> PyResult<Vec<(usize, usize)>> {
+    Ok(crate::central_directory_ranges(zip)
+        .map_err(map_err)?
+        .into_iter()
+        .map(|range| (range.start, range.len()))
+        .collect())
+}
+
 /// Structurally verify the embedding, as a dict with `has_manifest`,
 /// `manifest_len`, and `is_valid_zip`.
 ///
@@ -89,6 +100,7 @@ fn c2pa_zip(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(remove_manifest, m)?)?;
     m.add_function(wrap_pyfunction!(collection_members, m)?)?;
     m.add_function(wrap_pyfunction!(central_directory_range, m)?)?;
+    m.add_function(wrap_pyfunction!(central_directory_ranges, m)?)?;
     m.add_function(wrap_pyfunction!(verify, m)?)?;
     m.add_function(wrap_pyfunction!(manifest_path, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
