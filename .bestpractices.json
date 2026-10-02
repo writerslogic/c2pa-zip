@@ -125,12 +125,12 @@
   "static_analysis_fixed_justification": "CI enforces `-D warnings` on clippy, so any medium+ finding blocks merge (.github/workflows/ci.yml, .github/workflows/release.yml); commit e9cb2a2 'chore: harden lints, docs, and CI' shows findings being actively addressed.",
   "static_analysis_often_status": "Met",
   "static_analysis_often_justification": "clippy runs on every push and pull_request to main via .github/workflows/ci.yml, i.e. on every commit.",
-  "dynamic_analysis_status": "Unmet",
-  "dynamic_analysis_justification": "No dynamic analysis tool (e.g. cargo-fuzz, AFL, sanitizers) is configured in .github/workflows/; only static analysis (clippy) and unit/integration tests are run.",
+  "dynamic_analysis_status": "Met",
+  "dynamic_analysis_justification": "A cargo-fuzz target (fuzz/fuzz_targets/parse_untrusted.rs) drives the crate's untrusted-input parsers with libFuzzer; fuzz/README.md documents how to run it.",
   "dynamic_analysis_unsafe_status": "N/A",
   "dynamic_analysis_unsafe_justification": "No memory-unsafe code is present: src/lib.rs sets #![forbid(unsafe_code)], and the crate has zero non-optional dependencies (no C/C++ present via FFI in the core library; pyo3/wasm-bindgen bindings are optional feature-gated glue, not project-authored unsafe code).",
-  "dynamic_analysis_enable_assertions_status": "Unmet",
-  "dynamic_analysis_enable_assertions_justification": "No dynamic-analysis configuration exists in this repo (no fuzzing/sanitizer workflow found in .github/workflows/), so there is no assertion configuration to evaluate.",
+  "dynamic_analysis_enable_assertions_status": "Met",
+  "dynamic_analysis_enable_assertions_justification": "The fuzz target builds with cargo-fuzz's default dev profile, which enables debug assertions and overflow checks, so Rust's integer-overflow and bounds checks act as assertions during fuzzing.",
   "dynamic_analysis_fixed_status": "N/A",
   "dynamic_analysis_fixed_justification": "No dynamic analysis tool is currently run against this project, so there are no dynamic-analysis findings to fix."
 }
