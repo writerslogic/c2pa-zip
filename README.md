@@ -22,7 +22,6 @@ The Manifest Store is stored as a dedicated ZIP entry at a fixed location:
 | Compression | Stored (method `0`, uncompressed) |
 | Encryption | None |
 | General-purpose bit flag | `0` |
-| Media type | As recommended for external manifests |
 
 Embedding appends the manifest entry before the central directory, so existing entries keep their byte offsets; the central directory and end-of-central-directory record are then rebuilt. All parsing is bounds-checked against untrusted input, and ZIP64 archives are rejected (fail-closed) rather than mis-parsed.
 

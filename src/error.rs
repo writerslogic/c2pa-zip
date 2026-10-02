@@ -25,6 +25,9 @@ pub enum Error {
     /// The central-directory binding is split around the manifest CRC-32 and
     /// cannot be represented as one contiguous range.
     NonContiguousCentralDirectoryHash,
+    /// The manifest entry is compressed or encrypted. The specification
+    /// requires it be stored (compression method 0) and unencrypted.
+    ManifestEntryNotStoredOrEncrypted,
 }
 
 impl Error {
@@ -71,6 +74,9 @@ impl fmt::Display for Error {
             Self::NonContiguousCentralDirectoryHash => {
                 "ZIP central-directory hash requires multiple byte ranges"
             }
+            Self::ManifestEntryNotStoredOrEncrypted => {
+                "manifest entry must be stored (compression method 0) and unencrypted"
+            }
         };
         f.write_str(msg)
     }
@@ -95,6 +101,7 @@ mod tests {
             Error::InvalidMemberPath("../secret".into()),
             Error::MalformedDataDescriptor,
             Error::NonContiguousCentralDirectoryHash,
+            Error::ManifestEntryNotStoredOrEncrypted,
         ] {
             assert_eq!(e.code(), None, "{e:?} claimed a status code");
             assert!(

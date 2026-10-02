@@ -42,6 +42,7 @@ fn read_u32(buf: &[u8], at: usize) -> Result<u32, Error> {
 struct CdEntry {
     name: String,
     flags: u16,
+    method: u16,
     crc32: u32,
     compressed_size: usize,
     uncompressed_size: usize,
@@ -117,6 +118,7 @@ fn parse_layout(bytes: &[u8]) -> Result<ZipLayout, Error> {
         let comment = read_u16(bytes, cursor + 32)? as usize;
         let local_off = read_u32(bytes, cursor + 42)?;
         let flags = read_u16(bytes, cursor + 8)?;
+        let method = read_u16(bytes, cursor + 10)?;
         let crc32 = read_u32(bytes, cursor + 16)?;
         let compressed_size = read_u32(bytes, cursor + 20)?;
         let uncompressed_size = read_u32(bytes, cursor + 24)?;
@@ -149,6 +151,7 @@ fn parse_layout(bytes: &[u8]) -> Result<ZipLayout, Error> {
         entries.push(CdEntry {
             name,
             flags,
+            method,
             crc32,
             compressed_size: compressed_size as usize,
             uncompressed_size: uncompressed_size as usize,
@@ -359,6 +362,10 @@ fn entry_binding_range(
     Ok(entry.local_header_offset..end)
 }
 
+/// Reads any entry's raw content without the manifest-specific
+/// stored/unencrypted check [`read_manifest_entry`] applies -- used only by
+/// tests to inspect ordinary (non-manifest) entries after a round trip.
+#[cfg(test)]
 pub(crate) fn read_zip_entry_content<'a>(
     bytes: &'a [u8],
     name: &str,
@@ -367,6 +374,78 @@ pub(crate) fn read_zip_entry_content<'a>(
     for (i, entry) in layout.entries.iter().enumerate() {
         if entry.name != name {
             continue;
+        }
+        let range = entry_content_range(bytes, &layout, i)?;
+        return bytes.get(range).map(Some).ok_or(Error::Truncated);
+    }
+    Ok(None)
+}
+
+/// Overwrite the manifest entry's content in place, touching nothing else:
+/// not its own size fields, not any other entry's bytes, not the central
+/// directory or EOCD offsets. `new_content` must be exactly as long as the
+/// placeholder [`insert_zip_entry`] (via `embed_manifest`) originally wrote.
+///
+/// This is the second half of the two-pass flow the `c2pa.hash.data`
+/// assertion requires: reserve a placeholder of the real manifest's eventual
+/// size, hash the archive via [`central_directory_ranges`], sign, then call
+/// this to drop the signed bytes in without touching anything the hash
+/// already covers. [`embed_manifest`]/[`insert_zip_entry`] cannot be reused
+/// for the second pass because they always fully rebuild the central
+/// directory and EOCD from scratch, recomputing the manifest entry's own
+/// size fields and the EOCD's central-directory offset -- harmless when the
+/// final manifest happens to be exactly the placeholder's length, but
+/// silently invalidating the pass-1 hash otherwise, since only the 4-byte
+/// CRC is excluded from what gets hashed.
+pub(crate) fn fill_manifest(
+    bytes: &[u8],
+    name: &str,
+    new_content: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let layout = parse_layout(bytes)?;
+    let i = layout
+        .entries
+        .iter()
+        .position(|e| e.name == name)
+        .ok_or(Error::Truncated)?;
+    let entry = &layout.entries[i];
+    if entry.method != 0 || entry.flags & 1 != 0 {
+        return Err(Error::ManifestEntryNotStoredOrEncrypted);
+    }
+    let range = entry_content_range(bytes, &layout, i)?;
+    if new_content.len() != range.len() {
+        return Err(Error::Truncated);
+    }
+
+    let mut out = bytes.to_vec();
+    out[range.clone()].copy_from_slice(new_content);
+    let crc = crc32(new_content);
+    let local_crc_at = entry.local_header_offset + 14;
+    let cd_crc_at = entry.cd_header_offset + 16;
+    out[local_crc_at..local_crc_at + 4].copy_from_slice(&crc.to_le_bytes());
+    out[cd_crc_at..cd_crc_at + 4].copy_from_slice(&crc.to_le_bytes());
+    Ok(out)
+}
+
+/// As [`read_zip_entry_content`], but additionally enforces the manifest
+/// entry's own required shape: stored (compression method 0), unencrypted
+/// (general-purpose flag bit 0 clear). The spec requires both of this
+/// specific entry -- ordinary member entries are explicitly allowed to be
+/// compressed or encrypted -- but nothing previously checked either one on
+/// read, so a third-party-produced archive with a deflated or encrypted
+/// entry at this path would be silently accepted and its raw
+/// deflated/encrypted bytes handed back as "the manifest".
+pub(crate) fn read_manifest_entry<'a>(
+    bytes: &'a [u8],
+    name: &str,
+) -> Result<Option<&'a [u8]>, Error> {
+    let layout = parse_layout(bytes)?;
+    for (i, entry) in layout.entries.iter().enumerate() {
+        if entry.name != name {
+            continue;
+        }
+        if entry.method != 0 || entry.flags & 1 != 0 {
+            return Err(Error::ManifestEntryNotStoredOrEncrypted);
         }
         let range = entry_content_range(bytes, &layout, i)?;
         return bytes.get(range).map(Some).ok_or(Error::Truncated);
