@@ -52,5 +52,5 @@ pub use binding::{central_directory_range, central_directory_ranges, collection_
 pub use error::Error;
 pub use reader::read_manifest;
 pub use verify::{verify, Compliance};
-pub use writer::{embed_manifest, remove_manifest};
+pub use writer::{embed_manifest, fill_manifest, remove_manifest};
 pub use zip::ZIP_MANIFEST_PATH;
